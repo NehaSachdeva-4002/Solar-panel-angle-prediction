@@ -4,7 +4,7 @@ from pysolar.solar import get_altitude, get_azimuth
 from datetime import datetime, timedelta, timezone
 
 # Function to generate synthetic data
-def generate_synthetic_data(num_entries=1000):
+def generate_synthetic_data(num_entries=50000):
     data = []
     base_date = datetime(2023, 1, 1, 0, 0, tzinfo=timezone.utc)  # Start date
 
