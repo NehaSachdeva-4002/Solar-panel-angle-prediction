@@ -15,21 +15,25 @@ app = Flask(__name__)
 def get_lat_lon(city_country):
     """Fetch latitude and longitude from city & country name."""
     geolocator = Nominatim(user_agent="solar_angle_app")
-    location = geolocator.geocode(city_country)
-    return (location.latitude, location.longitude) if location else (None, None)
+    try:
+        location = geolocator.geocode(city_country, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+    except Exception as e:
+        print(f"GeoPy error: {e}")
+    return None, None
 
 def compute_julian_day(year, month, day):
     """Compute the Julian day of the year."""
-    date = datetime.date(year, month, day)
-    return date.timetuple().tm_yday  
+    return datetime.date(year, month, day).timetuple().tm_yday  
 
 def estimate_missing_features(latitude, longitude, julian_day, hour):
-    """Estimate missing features based on empirical models & typical solar/weather conditions."""
+    """Estimate missing features using empirical models & solar/weather approximations."""
     
-    # Solar position estimates
-    altitude = max(0, 90 - abs(latitude - (julian_day - 173) * 0.2))  # Solar altitude angle
-    zenith_angle = 90 - altitude  # Zenith angle
-    azimuth_angle = (hour / 24) * 360  # Simplified azimuth estimation
+    # Estimate solar position
+    altitude = max(0, 90 - abs(latitude - (julian_day - 173) * 0.2))  
+    zenith_angle = min(90, max(0, 90 - altitude))  # Ensure physical limits
+    azimuth_angle = (hour / 24) * 360  
 
     # Approximate weather conditions
     temperature = np.clip(25 + (math.sin((julian_day / 365) * 2 * math.pi) * 10), -10, 40)
@@ -52,6 +56,12 @@ def estimate_missing_features(latitude, longitude, julian_day, hour):
         zenith_angle, azimuth_angle, 360 - azimuth_angle, julian_day
     ]
 
+def adjust_tilt_angle(raw_prediction):
+    """Adjust tilt angle to be within the optimal range (0°-90°)."""
+    if raw_prediction > 90:
+        return 180 - raw_prediction  # Reflect to keep within range
+    return raw_prediction
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     predicted_tilt = None
@@ -65,6 +75,7 @@ def index():
         hour = int(request.form.get("hour"))
         minute = int(request.form.get("minute"))  
 
+        # Get latitude & longitude
         latitude, longitude = get_lat_lon(city_country)
         if latitude is None or longitude is None:
             error = "Could not find the location. Please enter a valid city and country."
@@ -72,25 +83,18 @@ def index():
             julian_day = compute_julian_day(year, month, day)
             estimated_features = estimate_missing_features(latitude, longitude, julian_day, hour)
 
+            # Prepare input features
             input_features = np.array([[year, month, day, hour, minute, latitude, longitude] + estimated_features])
-            input_features_scaled = scaler.transform(input_features)  # Standardization
-            raw_prediction = model.predict(input_features_scaled)[0][0]  # Predicted tilt angle
+            input_features_scaled = scaler.transform(input_features.reshape(1, -1))  # Ensure correct shape
+            
+            # Model prediction
+            raw_prediction = model.predict(input_features_scaled)[0][0]  
+            predicted_tilt = round(adjust_tilt_angle(raw_prediction),2)
 
-            # 🟢 Debugging: Print the raw model output
-            print(f"Raw Predicted Tilt Angle: {raw_prediction}")
-
-            # 🔴 Fix the incorrect conditional logic
-            if raw_prediction > 90 and raw_prediction <= 180:
-                predicted_tilt = 180 - (raw_prediction - 90)
-            elif raw_prediction > 180:
-                predicted_tilt = 360 - raw_prediction
-            else:
-                predicted_tilt = raw_prediction
-
-            # 🟢 Debugging: Print the final adjusted output
-            print(f"Final Adjusted Tilt Angle: {predicted_tilt}")
+            # Debugging: Print the outputs
+            print(f"Raw Prediction: {raw_prediction}, Adjusted Tilt Angle: {predicted_tilt}")
 
     return render_template("index.html", predicted_tilt=predicted_tilt, error=error)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True) 
